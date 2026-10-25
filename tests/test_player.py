@@ -5,6 +5,16 @@ import pytest
 from player import Video
 
 
+@pytest.fixture(scope='session', autouse=True)
+def qt_app():
+    from PySide6.QtWidgets import QApplication
+    application = QApplication.instance() or QApplication([])
+    yield application
+    import gc
+    gc.collect()
+    application.processEvents()
+
+
 @pytest.fixture(scope='module')
 def movie(tmp_path_factory):
     path = tmp_path_factory.mktemp('media') / 'test.mov'
@@ -62,19 +72,40 @@ def test_two_panel_controls(movie):
         assert all(p.video.position == pytest.approx(0) for p in window.panels)
     finally:
         window.close()
+        import shiboken6
+        shiboken6.delete(window)
 
 
-def test_hevc_rotated_mov(tmp_path, movie):
+@pytest.mark.parametrize('angle', [90, -90, 180, 0])
+def test_hevc_rotated_mov(tmp_path, movie, angle):
     encoded = tmp_path / 'hevc.mov'
     rotated = tmp_path / 'portrait.mov'
     subprocess.run(['ffmpeg', '-v', 'error', '-i', str(movie), '-c:v', 'libx265',
                     '-x265-params', 'pools=1:frame-threads=1:log-level=error',
                     '-tag:v', 'hvc1', str(encoded)], check=True)
-    subprocess.run(['ffmpeg', '-v', 'error', '-display_rotation:v:0', '90', '-i', str(encoded),
+    subprocess.run(['ffmpeg', '-v', 'error', '-display_rotation:v:0', str(angle), '-i', str(encoded),
                     '-c', 'copy', str(rotated)], check=True)
     video = Video(rotated)
     try:
-        assert abs(video.rotation) == pytest.approx(90)
+        import numpy as np
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QImage
+        from app import Panel
+        app = QApplication.instance() or QApplication([])
+        panel = Panel('rotation')
+        panel.video = video
+        panel.render()
+        image = panel.pixmap.toImage().convertToFormat(QImage.Format.Format_RGB888)
+        actual = np.frombuffer(bytes(image.bits()), dtype=np.uint8).reshape(
+            image.height(), image.bytesPerLine())[:, :image.width() * 3].reshape(
+                image.height(), image.width(), 3)
+        reference = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(rotated),
+            '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+            capture_output=True, check=True).stdout
+        expected = np.frombuffer(reference, dtype=np.uint8).reshape(actual.shape)
+        assert np.abs(actual.astype(float) - expected.astype(float)).mean() < 3
+        import shiboken6
+        shiboken6.delete(panel)
         assert video.current.to_ndarray(format='rgb24').shape == (120, 160, 3)
         video.next()
         assert video.previous()

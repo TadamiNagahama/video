@@ -21,14 +21,14 @@ class Video:
             raise
 
     def _read_rotation(self):
-        # FFmpeg exposes iPhone orientation through display matrix side data.
+        # Display matrices use counterclockwise angles; Qt uses clockwise angles.
         for side in self.current.side_data:
             if side.type.name == 'DISPLAYMATRIX':
                 import struct, math
                 matrix = struct.unpack('9i', bytes(side))
-                self.rotation = -math.degrees(math.atan2(matrix[1], matrix[0]))
+                self.rotation = math.degrees(math.atan2(matrix[1], matrix[0]))
         if not self.rotation:
-            self.rotation = float(self.stream.metadata.get('rotate', 0))
+            self.rotation = -float(self.stream.metadata.get('rotate', 0))
 
     @property
     def position(self):
